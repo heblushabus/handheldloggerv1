@@ -1003,12 +1003,14 @@ void newDataCallback(const bme68xData data, const bsecOutputs outputs, Bsec2 cap
   if (isSaving && !stateLoaded)
     stateLoaded = true;
 
+  /*
   if (appState == DASHBOARD && isScreenOn)
   {
     display.clearDisplay();
     drawDashboard();
     display.display();
   }
+    */
 }
 
 // --- FLUSH BUFFER TO CSV ---
