@@ -30,8 +30,8 @@ const char *ota_password = "6767";
 #define I2C_SCL 15
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define TOUCH_THRESHOLD 68
-#define TOUCH_WAKE_THRESHOLD 68
+#define TOUCH_THRESHOLD 75
+#define TOUCH_WAKE_THRESHOLD 75
 
 #define WDT_TIMEOUT 30
 
