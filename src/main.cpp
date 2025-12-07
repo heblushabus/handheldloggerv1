@@ -38,7 +38,7 @@ const char *ota_password = "6767";
 
 /* --- NTP CONFIG --- */
 const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 10800;  // UTC+3
+const long TIMEZONE_UTC_PLUS_3_OFFSET = 10800;  // UTC+3 (3 hours * 3600 seconds)
 const int daylightOffset_sec = 0;
 bool timeIsSynced = false;
 
@@ -547,12 +547,15 @@ void loop()
 void syncTimeNTP() {
   if (timeIsSynced) return;  // Already synced
   
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  configTime(TIMEZONE_UTC_PLUS_3_OFFSET, daylightOffset_sec, ntpServer);
   
   // Wait up to 5 seconds for time sync
+  // Note: This blocks the main thread, but only runs once when WiFi first connects
+  // The watchdog timer (30s timeout) won't be triggered during this brief wait
   int attempts = 0;
   struct tm timeinfo;
   while (attempts < 50 && !getLocalTime(&timeinfo)) {
+    esp_task_wdt_reset();  // Reset watchdog during sync wait
     delay(100);
     attempts++;
   }
