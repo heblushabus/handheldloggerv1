@@ -40,6 +40,7 @@ const char *ota_password = "6767";
 const char* ntpServer = "pool.ntp.org";
 const long TIMEZONE_UTC_PLUS_3_OFFSET = 10800;  // UTC+3 (3 hours * 3600 seconds)
 const int daylightOffset_sec = 0;
+const int MAX_NTP_SYNC_ATTEMPTS = 50;  // 50 attempts * 100ms = 5 seconds max
 bool timeIsSynced = false;
 
 /* --- GRAPH CONFIG --- */
@@ -554,7 +555,7 @@ void syncTimeNTP() {
   // The watchdog timer (30s timeout) won't be triggered during this brief wait
   int attempts = 0;
   struct tm timeinfo;
-  while (attempts < 50 && !getLocalTime(&timeinfo)) {
+  while (attempts < MAX_NTP_SYNC_ATTEMPTS && !getLocalTime(&timeinfo)) {
     esp_task_wdt_reset();  // Reset watchdog during sync wait
     delay(100);
     attempts++;
