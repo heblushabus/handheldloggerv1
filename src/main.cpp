@@ -14,6 +14,7 @@
 #include <LittleFS.h>
 #include <OneButton.h>
 #include <esp_task_wdt.h>
+#include <time.h>
 
 /* --- CONFIGURATION --- */
 const char *ssid = "thePlekumat";
@@ -34,6 +35,13 @@ const char *ota_password = "6767";
 #define TOUCH_WAKE_THRESHOLD 75
 
 #define WDT_TIMEOUT 30
+
+/* --- NTP CONFIG --- */
+const char* ntpServer = "pool.ntp.org";
+const long TIMEZONE_UTC_PLUS_3_OFFSET = 10800;  // UTC+3 (3 hours * 3600 seconds)
+const int daylightOffset_sec = 0;
+const int MAX_NTP_SYNC_ATTEMPTS = 50;  // 50 attempts * 100ms = 5 seconds max
+bool timeIsSynced = false;
 
 /* --- GRAPH CONFIG --- */
 #define GRAPH_WIDTH 100
@@ -199,6 +207,10 @@ void wakeUpScreen();
 void checkTouchInput();
 void handleWiFiLogic();
 void dummyTouchCallback() {};
+void syncTimeNTP();
+String getTimeString();
+unsigned long getUnixTime();
+String getDateTimeString();
 
 // --- INPUT HANDLERS ---
 void handleClick()
@@ -532,6 +544,72 @@ void loop()
   }
 }
 
+// --- TIME HELPER FUNCTIONS ---
+void syncTimeNTP() {
+  if (timeIsSynced) return;  // Already synced
+  
+  configTime(TIMEZONE_UTC_PLUS_3_OFFSET, daylightOffset_sec, ntpServer);
+  
+  // Wait up to 5 seconds for time sync
+  // Note: This blocks the main thread, but only runs once when WiFi first connects
+  // The watchdog timer (30s timeout) won't be triggered during this brief wait
+  int attempts = 0;
+  struct tm timeinfo;
+  while (attempts < MAX_NTP_SYNC_ATTEMPTS && !getLocalTime(&timeinfo)) {
+    esp_task_wdt_reset();  // Reset watchdog during sync wait
+    delay(100);
+    attempts++;
+  }
+  
+  if (getLocalTime(&timeinfo)) {
+    timeIsSynced = true;
+  }
+}
+
+String getTimeString() {
+  if (!timeIsSynced) {
+    // Fallback to uptime
+    unsigned long uptimeSec = millis() / 1000;
+    unsigned long hours = uptimeSec / 3600;
+    unsigned long mins = (uptimeSec % 3600) / 60;
+    unsigned long secs = uptimeSec % 60;
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02lu:%02lu:%02lu", hours, mins, secs);
+    return String(buf);
+  }
+  
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return "??:??:??";
+  }
+  
+  char buf[16];
+  strftime(buf, sizeof(buf), "%H:%M:%S", &timeinfo);
+  return String(buf);
+}
+
+unsigned long getUnixTime() {
+  if (!timeIsSynced) {
+    return 0;
+  }
+  return time(nullptr);
+}
+
+String getDateTimeString() {
+  if (!timeIsSynced) {
+    return "";
+  }
+  
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return "";
+  }
+  
+  char buf[32];
+  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  return String(buf);
+}
+
 // --- ASYNC WIFI LOGIC ---
 void handleWiFiLogic()
 {
@@ -558,6 +636,12 @@ void handleWiFiLogic()
     {
       setupWebUI(server);
       webServerStarted = true;
+    }
+
+    // Sync time via NTP when WiFi connects
+    if (!timeIsSynced)
+    {
+      syncTimeNTP();
     }
 
     wifiConnectRequested = false;
@@ -1038,7 +1122,7 @@ void flushLog()
   {
     if (file.size() == 0)
     {
-      file.println("Time(ms),IAQ,CO2,Temp,Hum");
+      file.println("DateTime,Time(ms),IAQ,CO2,Temp,Hum");
     }
 
     // [OPTIMIZATION] Buffer writes to reduce filesystem overhead
@@ -1052,7 +1136,9 @@ void flushLog()
     {
       esp_task_wdt_reset();
       char lineBuf[128];
-      int len = snprintf(lineBuf, sizeof(lineBuf), "%lu,%.2f,%.2f,%.2f,%.2f\n",
+      String dtStr = getDateTimeString();
+      int len = snprintf(lineBuf, sizeof(lineBuf), "%s,%lu,%.2f,%.2f,%.2f,%.2f\n",
+                         dtStr.c_str(),
                          logBuffer[i].timestamp,
                          logBuffer[i].iaq,
                          logBuffer[i].co2,
@@ -1105,9 +1191,17 @@ void drawDashboard()
   display.setCursor(0, 0);
   display.print("IAQ:");
   display.print((int)currentData.iaq);
-  display.setCursor(75, 0);
-  display.print(currentData.voltage, 3);
-  display.print("V");
+  
+  // Display time on the right when synced
+  if (timeIsSynced) {
+    String timeStr = getTimeString();
+    display.setCursor(65, 0);
+    display.print(timeStr);
+  } else {
+    display.setCursor(75, 0);
+    display.print(currentData.voltage, 3);
+    display.print("V");
+  }
 
   static bool dotState = false;
   dotState = !dotState;
@@ -1159,6 +1253,15 @@ void drawDashboard()
     iconX -= 10;
   }
 
+  // 4. Clock Icon (if time is synced) - small clock symbol
+  if (timeIsSynced)
+  {
+    display.drawCircle(iconX + 3, iconY + 3, 3, SSD1306_WHITE);
+    display.drawLine(iconX + 3, iconY + 3, iconX + 3, iconY + 1, SSD1306_WHITE);
+    display.drawLine(iconX + 3, iconY + 3, iconX + 5, iconY + 3, SSD1306_WHITE);
+    iconX -= 10;
+  }
+
   display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
 
   display.setCursor(0, 14);
@@ -1184,8 +1287,14 @@ void drawDashboard()
     display.print("Eco");
 
   display.setCursor(35, 54);
-  display.print(currentData.batteryPercent);
-  display.print("%");
+  if (timeIsSynced) {
+    // Show voltage when time is on top
+    display.print(currentData.voltage, 2);
+    display.print("V");
+  } else {
+    display.print(currentData.batteryPercent);
+    display.print("%");
+  }
 
   display.setCursor(75, 54);
   display.print("Acc:");
