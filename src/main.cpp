@@ -505,28 +505,10 @@ void loop()
       // Serial.begin(115200);
 
       esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-      if (cause == ESP_SLEEP_WAKEUP_EXT1)
+      if (cause == ESP_SLEEP_WAKEUP_EXT1 || cause == ESP_SLEEP_WAKEUP_TOUCHPAD)
       {
         wakeUpScreen();
         stayAwakeUntil = millis() + 200;
-      }
-      else if (cause == ESP_SLEEP_WAKEUP_TOUCHPAD)
-      {
-        // Verify touch to prevent false wakeups
-        int check = 0;
-        for (int i = 0; i < 4; i++)
-          check += touchRead(TOUCH_PIN);
-        check /= 4;
-
-        if (check < TOUCH_THRESHOLD)
-        {
-          wakeUpScreen();
-          stayAwakeUntil = millis() + 200;
-        }
-        else
-        {
-          esp_light_sleep_start();
-        }
       }
     }
   }
