@@ -89,13 +89,14 @@ void updateBLEData(float temp, float hum, float press, float iaq, float co2)
             pPressChar->notify();
 
         // Custom
-        std::string iaqStr = std::to_string(iaq);
-        pIAQChar->setValue(iaqStr);
+        char valBuf[16];
+        int len = snprintf(valBuf, sizeof(valBuf), "%.2f", iaq);
+        pIAQChar->setValue((uint8_t *)valBuf, len);
         if (deviceConnected)
             pIAQChar->notify();
 
-        std::string co2Str = std::to_string(co2);
-        pCO2Char->setValue(co2Str);
+        len = snprintf(valBuf, sizeof(valBuf), "%.2f", co2);
+        pCO2Char->setValue((uint8_t *)valBuf, len);
         if (deviceConnected)
             pCO2Char->notify();
     }

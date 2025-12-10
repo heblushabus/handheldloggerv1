@@ -9,11 +9,21 @@
 #include "SharedData.h"
 #include "WebUI.h"
 #include "BLEHandler.h"
+#include "LEDHandler.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <LittleFS.h>
 #include <OneButton.h>
 #include <esp_task_wdt.h>
+#include <driver/rtc_io.h>
+#include <driver/touch_pad.h>
+
+// RTC Memory - Persistent across Deep Sleep
+RTC_DATA_ATTR struct
+{
+  uint32_t bootCount;
+  time_t lastEpoch; // For future RTC logic
+} rtcBuffer;
 
 /* --- CONFIGURATION --- */
 const char *ssid = "thePlekumat";
@@ -21,17 +31,18 @@ const char *password = "170525ANee";
 const char *ota_hostname = "handheldlogger";
 const char *ota_password = "6767";
 
-#define BATTERY_PIN 33
+#define BATTERY_PIN 9 // GPIO 9 on deneyapkart1Av2 (ESP32-S3)
 #define GPKEY_PIN 0
-#define TOUCH_PIN 2
+#define TOUCH_PIN 10 // GPIO 10 on deneyapkart1Av2 (ESP32-S3)
 #define VOLT_DIVIDER_RATIO 2.0
 
-#define I2C_SDA 4
-#define I2C_SCL 15
+#define I2C_SDA 47 // GPIO 47 on deneyapkart1Av2 (ESP32-S3)
+#define I2C_SCL 21 // GPIO 21 on deneyapkart1Av2 (ESP32-S3)
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define TOUCH_THRESHOLD 75
-#define TOUCH_WAKE_THRESHOLD 75
+// ESP32-S3 touch triggers when value RISES above threshold (inverted from ESP32)
+#define TOUCH_THRESHOLD 60000
+#define TOUCH_WAKE_THRESHOLD 60000
 
 #define WDT_TIMEOUT 30
 
@@ -179,8 +190,7 @@ int menuScrollOffset = 0;
 void newDataCallback(const bme68xData data, const bsecOutputs outputs, Bsec2 capture);
 void checkBsecStatus(Bsec2 bsec);
 void setupOTA();
-void checkBsecStatus(Bsec2 bsec);
-void setupOTA();
+
 // void setupWebServer(); // Moved to WebUI.cpp
 float getBatteryVoltage();
 void loadBsecState();
@@ -198,6 +208,7 @@ void updateAllGraphBuffers();
 void wakeUpScreen();
 void checkTouchInput();
 void handleWiFiLogic();
+void setupSleepWakeup();
 void dummyTouchCallback() {};
 
 // --- INPUT HANDLERS ---
@@ -299,6 +310,17 @@ void setup()
 {
   setCpuFrequencyMhz(80);
   // Serial.begin(115200);
+
+  // Increment Boot Count
+  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_UNDEFINED)
+  {
+    rtcBuffer.bootCount++;
+  }
+  else
+  {
+    rtcBuffer.bootCount = 0;
+  }
+
   sysStats.bootTime = millis();
 
   // Clear Graph Buffers
@@ -353,9 +375,41 @@ void setup()
   applyConfigMode();
   envSensor.attachCallback(newDataCallback);
 
+  // Configure sleep wakeup sources once (optimization)
+  setupSleepWakeup();
+
+  // Initialize addressable LED
+  initLED();
+  setLEDState(LED_IDLE);
+
   lastActivityTime = millis();
   lastBsecRun = millis();
   stayAwakeUntil = millis() + 2000;
+}
+
+// --- SLEEP WAKEUP CONFIGURATION (called once in setup) ---
+void setupSleepWakeup()
+{
+  // ESP32-S3 Specific Sleep Configuration
+
+  // 1. Button Wakeup
+  // For Light Sleep: Use gpio_wakeup (faster, supports any GPIO)
+  gpio_wakeup_enable((gpio_num_t)GPKEY_PIN, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+
+  // For Deep Sleep: configured in act_PowerOff
+
+  // 2. Touch Wakeup
+  // Already configured via touchAttachInterrupt in setup()
+  esp_sleep_enable_touchpad_wakeup();
+
+  // 3. Power Management (Optional)
+  // esp_pm_config_esp32s3_t pm_config = {
+  //     .max_freq_mhz = 80,
+  //     .min_freq_mhz = 20, // Lower freq when idle
+  //     .light_sleep_enable = true
+  // };
+  // esp_pm_configure(&pm_config);
 }
 
 void loop()
@@ -373,10 +427,41 @@ void loop()
   }
 
   btn.tick();
-  checkTouchInput();
+  btn.tick();
+
+  static unsigned long lastTouchCheck = 0;
+  if (millis() - lastTouchCheck > 20)
+  {
+    checkTouchInput();
+    lastTouchCheck = millis();
+  }
 
   if (!envSensor.run())
     checkBsecStatus(envSensor);
+
+  // --- LED STATUS UPDATE ---
+  // Priority: Recording > Low Battery > WiFi > BLE > Idle
+  if (isRecording)
+  {
+    setLEDState(LED_RECORDING);
+  }
+  else if (currentData.batteryPercent < 15)
+  {
+    setLEDState(LED_LOW_BATTERY);
+  }
+  else if (WiFi.status() == WL_CONNECTED)
+  {
+    setLEDState(LED_WIFI_ACTIVE);
+  }
+  else if (isBLEConnected())
+  {
+    setLEDState(LED_BLE_ACTIVE);
+  }
+  else
+  {
+    setLEDState(LED_IDLE);
+  }
+  updateLED(); // Handle LED animations
   updateBsecState(false);
 
   // --- TIMEOUT LOGIC ---
@@ -419,7 +504,14 @@ void loop()
     if (shouldDraw)
     {
       if (sysConfig.opMode == MODE_REALTIME)
-        currentData.voltage = getBatteryVoltage();
+      {
+        static unsigned long lastBatCheck = 0;
+        if (millis() - lastBatCheck > 1000)
+        {
+          currentData.voltage = getBatteryVoltage();
+          lastBatCheck = millis();
+        }
+      }
 
       display.clearDisplay();
       if (appState == DASHBOARD)
@@ -489,8 +581,8 @@ void loop()
         }
       }
 
-      esp_sleep_enable_ext1_wakeup(1ULL << GPIO_NUM_0, ESP_EXT1_WAKEUP_ALL_LOW);
-      esp_sleep_enable_touchpad_wakeup();
+      // Wakeup sources (gpio, touch) configured once in setup
+      // Only timer changes each cycle
       esp_sleep_enable_timer_wakeup(sleepUs);
 
       // Flush Serial before sleep to ensure all prints are sent
@@ -505,10 +597,16 @@ void loop()
       // Serial.begin(115200);
 
       esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-      if (cause == ESP_SLEEP_WAKEUP_EXT1 || cause == ESP_SLEEP_WAKEUP_TOUCHPAD)
+      if (cause == ESP_SLEEP_WAKEUP_GPIO || cause == ESP_SLEEP_WAKEUP_TOUCHPAD || cause == ESP_SLEEP_WAKEUP_EXT1)
       {
         wakeUpScreen();
         stayAwakeUntil = millis() + 200;
+
+        // Handle Quick Button Press immediately if needed
+        if (cause == ESP_SLEEP_WAKEUP_GPIO)
+        {
+          // Debounce or flag update
+        }
       }
     }
   }
@@ -655,7 +753,7 @@ void act_ToggleRecord()
     // Stop Recording
     flushLog(); // Flush remaining data
     isRecording = false;
-    currentLogFileName = "";
+    currentLogFileName[0] = '\0';
   }
   else
   {
@@ -663,7 +761,7 @@ void act_ToggleRecord()
     // Generate filename
     char buf[32];
     sprintf(buf, "/log_%03d.csv", sysConfig.nextLogIndex);
-    currentLogFileName = String(buf);
+    snprintf(currentLogFileName, sizeof(currentLogFileName), "%s", buf);
 
     sysConfig.nextLogIndex++;
     saveConfig(); // Save next index
@@ -741,12 +839,23 @@ void act_PowerOff()
   // Turn off display
   display.ssd1306_command(SSD1306_DISPLAYOFF);
 
+  // Isolate GPIOs to prevent leakage during Deep Sleep
+  // I2C Pins should be isolated or held high if they have pull-ups
+  // gpio_hold_en((gpio_num_t)I2C_SDA);
+  // gpio_hold_en((gpio_num_t)I2C_SCL);
+
+  // Isolate Display CS/Res if they existed separately, SSD1306 on I2C usually just needs bus idle.
+
   // Disable other wakeup sources that might be active (e.g. BSEC timer)
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ULP);
 
-  // Configure Wakeup on Button Press (GPIO 0 LOW)
-  // esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
+  // Configure Wakeup on Button Press
+  // On ESP32-S3, ext1 is robust.
+  esp_sleep_enable_ext1_wakeup(1ULL << GPKEY_PIN, ESP_EXT1_WAKEUP_ANY_LOW);
+
+  // Ensure Touch Wakeup is enabled if desired (optional during deep sleep)
+  // esp_sleep_enable_touchpad_wakeup();
 
   // Enter Deep Sleep
   esp_deep_sleep_start();
@@ -763,8 +872,8 @@ const char *get_WiFiLabel()
   static char buf[32];
   if (WiFi.status() == WL_CONNECTED)
   {
-    String ip = WiFi.localIP().toString();
-    snprintf(buf, sizeof(buf), "WiFi: %s", ip.c_str());
+    IPAddress ip = WiFi.localIP();
+    snprintf(buf, sizeof(buf), "WiFi: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     return buf;
   }
   if (wifiConnectRequested)
@@ -802,8 +911,8 @@ void checkTouchInput()
 
   unsigned long now = millis();
 
-  // 1. Touch Press
-  if (val < TOUCH_THRESHOLD)
+  // 1. Touch Press (ESP32-S3: value rises when touched)
+  if (val > TOUCH_THRESHOLD)
   {
     if (!isTouching)
     {
@@ -1009,7 +1118,7 @@ void flushLog()
     display.display();
   }
 
-  if (currentLogFileName == "")
+  if (currentLogFileName[0] == '\0')
   {
     isFlushing = false;
     return;

@@ -5,4 +5,4 @@ volatile SensorReadings currentData;
 Stats sysStats;
 SystemConfig sysConfig;
 bool isRecording = false;
-String currentLogFileName = "";
+char currentLogFileName[32] = "";

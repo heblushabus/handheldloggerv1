@@ -38,4 +38,4 @@ extern volatile SensorReadings currentData;
 extern Stats sysStats;
 extern SystemConfig sysConfig;
 extern bool isRecording;
-extern String currentLogFileName;
+extern char currentLogFileName[32];

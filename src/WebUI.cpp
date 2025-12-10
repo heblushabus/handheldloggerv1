@@ -69,19 +69,18 @@ void setupWebUI(WebServer &server)
                   server.sendContent("<h1>Air Monitor</h1>");
 
                   // Live Data Card
-                  String html = "<div class='card'>";
-                  html += "<div style='margin-bottom:10px; font-weight:bold;' id='recStatus'>Checking...</div>";
-                  html += "<div class='grid'>";
-                  html += "<div class='stat'><span class='label'>IAQ</span><span class='value' id='iaq'>--</span></div>";
-                  html += "<div class='stat'><span class='label'>CO2</span><span class='value' id='co2'>--</span>ppm</div>";
-                  html += "<div class='stat'><span class='label'>Temp</span><span class='value' id='temp'>--</span>°C</div>";
-                  html += "<div class='stat'><span class='label'>Humidity</span><span class='value' id='hum'>--</span>%</div>";
-                  html += "<div class='stat'><span class='label'>Pressure</span><span class='value' id='press'>--</span>Pa</div>";
-                  html += "<div class='stat'><span class='label'>Voltage</span><span class='value' id='volt'>--</span>V</div>";
-                  html += "</div>";
-                  html += "<div style='margin-top:10px; font-size:0.9rem;'>Accuracy: <span id='acc'>0</span>/3</div>";
-                  html += "</div>";
-                  server.sendContent(html);
+                  server.sendContent(F("<div class='card'>"));
+                  server.sendContent(F("<div style='margin-bottom:10px; font-weight:bold;' id='recStatus'>Checking...</div>"));
+                  server.sendContent(F("<div class='grid'>"));
+                  server.sendContent(F("<div class='stat'><span class='label'>IAQ</span><span class='value' id='iaq'>--</span></div>"));
+                  server.sendContent(F("<div class='stat'><span class='label'>CO2</span><span class='value' id='co2'>--</span>ppm</div>"));
+                  server.sendContent(F("<div class='stat'><span class='label'>Temp</span><span class='value' id='temp'>--</span>°C</div>"));
+                  server.sendContent(F("<div class='stat'><span class='label'>Humidity</span><span class='value' id='hum'>--</span>%</div>"));
+                  server.sendContent(F("<div class='stat'><span class='label'>Pressure</span><span class='value' id='press'>--</span>Pa</div>"));
+                  server.sendContent(F("<div class='stat'><span class='label'>Voltage</span><span class='value' id='volt'>--</span>V</div>"));
+                  server.sendContent(F("</div>"));
+                  server.sendContent(F("<div style='margin-top:10px; font-size:0.9rem;'>Accuracy: <span id='acc'>0</span>/3</div>"));
+                  server.sendContent(F("</div>"));
 
                   // File List Card
                   server.sendContent("<div class='card'><h3>Recordings</h3>");
@@ -139,7 +138,7 @@ void setupWebUI(WebServer &server)
             currentData.accuracy,
             millis(),
             isRecording ? "true" : "false",
-            currentLogFileName.c_str()
+            currentLogFileName
         );
         server.send(200, "application/json", json); });
 
